@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.archer.nifi</groupId>
+        <artifactId>nifi-archer-router-bundle</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>nifi-archer-router-processors</artifactId>
+    <packaging>jar</packaging>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.apache.nifi</groupId>
+            <artifactId>nifi-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.nifi</groupId>
+            <artifactId>nifi-utils</artifactId>
+        </dependency>
+        <dependency>
+            <!-- Record/RecordSchema/RecordSetWriter and the RecordSetWriterFactory
+                 controller-service API, used for the optional "Record Writer"
+                 property on the INBOX operation. Both are already pulled in
+                 transitively at runtime by nifi-standard-services-api-nar (a
+                 dependency of nifi-archer-router-nar), hence "provided" here:
+                 needed only to compile against, not to bundle into this NAR. -->
+            <groupId>org.apache.nifi</groupId>
+            <artifactId>nifi-record</artifactId>
+            <version>${nifi.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.nifi</groupId>
+            <artifactId>nifi-record-serialization-service-api</artifactId>
+            <version>${nifi.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+        <dependency>
+            <!-- Il certificato TLS del router ha subject vuoto e nessuna
+                 SubjectAlternativeName: da una certa versione in poi il
+                 parser X.509 di default della JVM (Sun/OpenJDK) rifiuta di
+                 leggerlo del tutto (CertificateParsingException), ancora
+                 PRIMA che un TrustManager permissivo possa intervenire.
+                 Il livello TLS di Bouncy Castle (provider "BCJSSE") ha un
+                 parser più tollerante ed è il fix standard per questo
+                 problema con dispositivi embedded dai certificati
+                 non conformi. Vedi ArcherClient.newHttpClient().
+
+                 Versione FISSATA a 1.81.1 di proposito: la 1.86 (l'ultima
+                 al momento in cui è stato scritto questo bundle) ha un bug
+                 reale nel proprio multi-release JAR — bctls-jdk18on-1.86
+                 contiene due varianti incompatibili di
+                 org.bouncycastle.jsse.provider.SSLEngineUtil (una in
+                 META-INF/versions/9, con firma diversa da quella di base)
+                 che su JVM recenti produce
+                 "NoSuchMethodError: SSLEngineUtil.create(...)" a runtime,
+                 PRIMA ancora di arrivare all'handshake TLS. Verificato
+                 empiricamente contro il router reale: 1.81.1 funziona,
+                 1.86 no. Prima di alzare questa versione, ritestare con
+                 ArcherClientLiveSmokeTool (src/test/java, non un test
+                 JUnit: si lancia a mano, vedi il suo Javadoc). -->
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bctls-jdk18on</artifactId>
+            <version>1.81.1</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.nifi</groupId>
+            <artifactId>nifi-mock</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- Versione allineata a quella trascinata da nifi-mock in NiFi 2.11,
+                 per evitare conflitti fra junit-jupiter-api e junit-platform-engine
+                 di major version diverse sul classpath dei test. -->
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>6.1.2</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>
