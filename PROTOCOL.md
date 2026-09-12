@@ -240,6 +240,19 @@ caricato/decifrato dinamicamente dopo il login, non ispezionato). In pratica
 non è necessario: la sessione seguente prende comunque il posto di quella
 attiva.
 
+**Nota pratica confermata**: tenere aperta la GUI del router in un browser
+(anche solo sulla pagina di login, non serve essere autenticati) mentre un
+client automatizzato (script o processor NiFi) tenta il login può causare
+fallimenti intermittenti — inclusi `406` su endpoint non autenticati come
+`/cgi/getGDPRParm` — perché il client automatizzato finisce a contendersi lo
+slot di sessione con il polling in background della pagina del browser.
+Chiudere la scheda del browser risolve il problema. Se si esegue un client
+automatizzato su un ciclo/scheduling ravvicinato (es. un processor NiFi con
+scheduling a intervallo troppo corto o "Concurrent Tasks" > 1), lo stesso
+tipo di conflitto può presentarsi anche fra esecuzioni consecutive del
+client stesso: il webserver embedded del router regge male richieste di
+login troppo ravvicinate/parallele.
+
 ### 6.2 Bug del webserver embedded sul riuso della connessione
 
 Il webserver del router **non gestisce correttamente il keep-alive HTTP**
