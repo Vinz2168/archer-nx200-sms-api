@@ -110,7 +110,8 @@ end-to-end contro un Archer NX200 reale**, con credenziali corrette:
 handshake RSA/AES-128-CBC, sessione (JSESSIONID + TokenID), login,
 `sim_info` e `sms_inbox` restituiscono dati reali dal router, su entrambi i
 transport (MCP via JSON-RPC su stdio, REST via HTTP), singolarmente e
-insieme. Non ancora esercitato in questa sessione: `sms_send` (evitato
-deliberatamente per non inviare SMS di test non richiesti) e il retry
+insieme, incluso `sms_send` (esempio dedicato `send_test_sms.rs`, separato
+da `live_check.rs` che resta di sola lettura): SMS inviato con successo,
+`sendResult: "1"` confermato dal router. Non ancora esercitato: il retry
 automatico su sessione scaduta/rubata (richiederebbe un secondo login
 concorrente, es. dalla GUI, durante un test).
