@@ -226,19 +226,27 @@ public class ArcherClient implements AutoCloseable {
     // The router's embedded webserver has been observed returning a bare
     // "406 Not Acceptable" — including on unauthenticated endpoints such as
     // /cgi/getGDPRParm — apparently as a transient hiccup rather than a real,
-    // persistent rejection: e.g. after the panel has sat idle for a while.
-    // A single retry clears it in practice. Capped at ONE retry, and
+    // persistent rejection: e.g. after the panel has sat idle for a while. A
+    // single retry clears it in practice. An independent client for the same
+    // router family (tplinkrouterc6u/client/mr.py, see
+    // https://github.com/AlexandrErohin/TP-Link-Archer-C6U) confirms this is
+    // a known quirk of this firmware and retries on the same two status
+    // codes, 406 *and* 500, on every request. Capped at ONE retry here, and
     // deliberately kept separate from MAX_CONNECTION_ATTEMPTS: a full
     // operation (login, inbox, simInfo, ...) is made of several of these
     // calls, each with its own retry budget, so an aggressive per-call retry
     // count would multiply into a lot of extra traffic against a router that
     // is, by assumption, already struggling — the opposite of what we want.
-    private static final int MAX_406_RETRIES = 1;
+    private static final int MAX_TRANSIENT_STATUS_RETRIES = 1;
+
+    private static boolean isTransientStatus(int statusCode) {
+        return statusCode == 406 || statusCode == 500;
+    }
 
     private HttpResponse<String> send(String path, String method, HttpRequest.BodyPublisher bodyPublisher,
                                        Map<String, String> extraHeaders) throws ArcherException {
         Exception lastError = null;
-        int retries406 = 0;
+        int transientRetries = 0;
         for (int attempt = 0; attempt < MAX_CONNECTION_ATTEMPTS; attempt++) {
             try {
                 HttpRequest.Builder reqBuilder = HttpRequest.newBuilder(URI.create(baseUrl + path))
@@ -258,8 +266,8 @@ public class ArcherClient implements AutoCloseable {
                     HttpResponse<String> resp = client.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
                     captureSessionCookie(resp);
 
-                    if (resp.statusCode() == 406 && retries406 < MAX_406_RETRIES) {
-                        retries406++;
+                    if (isTransientStatus(resp.statusCode()) && transientRetries < MAX_TRANSIENT_STATUS_RETRIES) {
+                        transientRetries++;
                         sleepQuiet(1500);
                         continue;
                     }
@@ -328,8 +336,19 @@ public class ArcherClient implements AutoCloseable {
         HttpResponse<String> resp = post("/cgi_gdpr?9", body.getBytes(StandardCharsets.UTF_8),
                 Map.of("Content-Type", "text/plain"));
         if (resp.statusCode() != 200) {
-            throw new ArcherException("/cgi_gdpr ha risposto HTTP " + resp.statusCode()
-                    + " (token/cookie di sessione mancante o scaduto?)", null);
+            String message = "/cgi_gdpr ha risposto HTTP " + resp.statusCode()
+                    + " (token/cookie di sessione mancante o scaduto?)";
+            // Solo per le chiamate dati post-login questo è il segnale che la
+            // sessione (probabilmente rubata da un altro login, es. dalla GUI
+            // del browser - vedi PROTOCOL.md §6.1) non è più valida: un
+            // chiamante con stato può intercettare questo caso specifico per
+            // ri-autenticarsi e ritentare. Un fallimento del login stesso
+            // (credenziali sbagliate) resta invece un ArcherException
+            // generico: ritentarlo non risolverebbe nulla.
+            if (!isLogin) {
+                throw new SessionExpiredException(message, null);
+            }
+            throw new ArcherException(message, null);
         }
         return ArcherCrypto.aesDecrypt(resp.body(), aesKey, aesIv);
     }
@@ -535,6 +554,24 @@ public class ArcherClient implements AutoCloseable {
     /** Eccezione applicativa per qualunque errore del protocollo/della chiamata HTTP. */
     public static class ArcherException extends Exception {
         public ArcherException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
+    /**
+     * Sottoclasse di {@link ArcherException} sollevata solo da una chiamata
+     * dati post-login ({@code so}/{@code go}/{@code gl}) che riceve un HTTP
+     * non-200 dal router: è il segnale che la sessione corrente (cookie
+     * JSESSIONID + token) non è più valida, tipicamente perché un altro
+     * login (es. dalla GUI del browser, vedi PROTOCOL.md §6.1) l'ha
+     * scavalcata. Un chiamante che mantiene lo stato della sessione tra più
+     * invocazioni (come {@code InvokeArcherRouter}) può intercettare
+     * specificamente questo caso per ri-autenticarsi e ritentare, a
+     * differenza di un fallimento del login stesso (credenziali sbagliate),
+     * che resta un {@link ArcherException} generico.
+     */
+    public static class SessionExpiredException extends ArcherException {
+        public SessionExpiredException(String message, Throwable cause) {
             super(message, cause);
         }
     }
