@@ -83,6 +83,26 @@ Produce un binario nativo autocontenuto in `target/release/mcp-archer-router`
 dinamiche sono le librerie di sistema — verificabile con `otool -L`, su
 Linux con `ldd`).
 
+### Cross-compilare per Linux x86_64 (es. per un homeserver)
+
+Da macOS, con [`cross`](https://github.com/cross-rs/cross) (richiede Docker):
+
+```
+cargo install cross --git https://github.com/cross-rs/cross
+cross build --release --target x86_64-unknown-linux-musl
+```
+
+Target `musl`, non `gnu`: produce un binario **staticamente linkato**
+(`ldd` mostra solo il proprio loader musl, nessuna libreria esterna) — gira
+su qualunque distro Linux x86_64 senza vincoli di versione glibc. Il
+binario risultante è in
+`target/x86_64-unknown-linux-musl/release/mcp-archer-router`; uno `strip`
+(es. `docker run --rm --platform linux/amd64 -v "$PWD/...:/out" alpine sh -c
+"apk add -q binutils && strip /out/mcp-archer-router"`) lo riduce di
+circa un quarto. Verificato (in questo modo, cross-compilato da macOS
+arm64) sia con `file`/`ldd` sia con un'esecuzione reale in un container
+`--platform linux/amd64`.
+
 ## Configurazione in un client MCP
 
 Esempio per un client che legge un file `mcp.json`/`claude_desktop_config.json`:
