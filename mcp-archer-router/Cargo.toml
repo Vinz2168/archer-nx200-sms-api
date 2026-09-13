@@ -1,0 +1,25 @@
+[package]
+name = "mcp-archer-router"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aes = "0.9.3"
+anyhow = "1.0.104"
+axum = "0.8.9"
+base64 = "0.23.1"
+cbc = { version = "0.2.1", features = ["alloc"] }
+hex = "0.4.3"
+md-5 = "0.11.0"
+num-bigint = "0.5.1"
+num-traits = "0.2.19"
+rand = "0.10.2"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
+rmcp = { version = "3.3.0", features = ["server", "macros", "transport-io", "schemars"] }
+schemars = "1.2.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "io-std", "sync", "time", "net"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

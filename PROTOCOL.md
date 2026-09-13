@@ -326,4 +326,11 @@ funzione invece di tentativi alla cieca.
   `siminfo`), CLI pronta all'uso.
 - `nifi-archer-router/` — bundle Maven per Apache NiFi 2.x con lo stesso
   client riscritto in Java (`ArcherCrypto`, `ArcherClient`) e il processor
-  `InvokeArcherRouter`.
+  `InvokeArcherRouter`. Login lazy con sessione in cache tra le esecuzioni
+  (vedi `README.md` del bundle e il Javadoc di `InvokeArcherRouter`).
+- `mcp-archer-router/` — server MCP in Rust (transport stdio) con lo stesso
+  client riscritto in Rust e tool `sms_inbox`/`sms_send`/`sim_info`; stessa
+  logica di login lazy + retry-on-session-expired del processor NiFi.
+- Libreria Python di terze parti che copre lo stesso protocollo (incluso
+  l'NX200): https://github.com/AlexandrErohin/TP-Link-Archer-C6U — utile
+  riferimento incrociato, non usata da questo repo.
