@@ -105,16 +105,12 @@ Esempio per un client che legge un file `mcp.json`/`claude_desktop_config.json`:
 ## Stato
 
 Compila, esegue i test crittografici (`cargo test`: MD5, AES-128-CBC, firma
-RSA raw verificati contro vettori noti/una chiave di test) e **testato
-contro un Archer NX200 reale**: handshake RSA/AES-128-CBC, sessione
-(JSESSIONID + TokenID) e decifratura della risposta funzionano
-correttamente end-to-end su entrambi i transport (MCP via JSON-RPC su
-stdio, REST via HTTP), singolarmente e insieme. Non è stato eseguito un
-login con credenziali corrette in questa sessione (serve la password del
-pannello, non condivisa con l'agente per motivi di sicurezza): il test è
-stato fatto con una password errata, che il router rifiuta con un codice di
-errore applicativo pulito (`$.ret=71233`, "credenziali errate") — la stessa
-strada percorsa da un login riuscito, fino al passo finale. Da verificare
-con la password reale: `sms_inbox`/`sim_info` con dati veri, e `sms_send`.
-`examples/live_check.rs` (`cargo run --release --example live_check`) è
-pronto per farlo in un secondo momento.
+RSA raw verificati contro vettori noti/una chiave di test) ed è **verificato
+end-to-end contro un Archer NX200 reale**, con credenziali corrette:
+handshake RSA/AES-128-CBC, sessione (JSESSIONID + TokenID), login,
+`sim_info` e `sms_inbox` restituiscono dati reali dal router, su entrambi i
+transport (MCP via JSON-RPC su stdio, REST via HTTP), singolarmente e
+insieme. Non ancora esercitato in questa sessione: `sms_send` (evitato
+deliberatamente per non inviare SMS di test non richiesti) e il retry
+automatico su sessione scaduta/rubata (richiederebbe un secondo login
+concorrente, es. dalla GUI, durante un test).
