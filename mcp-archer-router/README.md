@@ -72,6 +72,21 @@ Almeno uno tra `ARCHER_MCP_ENABLED` e `ARCHER_REST_ENABLED` deve restare
 `true`, altrimenti il processo si rifiuta di partire (log d'errore + exit
 non-zero).
 
+## Binari precompilati
+
+Ogni tag `vX.Y.Z` (vedi [Release](https://github.com/Vinz2168/archer-nx200-sms-api/releases))
+attiva una GitHub Action (`.github/workflows/release.yml`, alla root del
+repo) che compila nativamente e pubblica i binari per:
+
+- macOS Apple Silicon (`aarch64-apple-darwin`)
+- macOS Intel (`x86_64-apple-darwin`)
+- Linux x86_64, staticamente linkato (`x86_64-unknown-linux-musl`)
+- Windows x86_64 (`x86_64-pc-windows-msvc`)
+
+Ogni archivio (`.tar.gz` per macOS/Linux, `.zip` per Windows) contiene il
+binario, questo README e `PROTOCOL.md`. Per compilare da sorgente invece,
+vedi sotto.
+
 ## Build
 
 ```

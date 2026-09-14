@@ -1,0 +1,103 @@
+name: Release mcp-archer-router
+
+# Triggered by pushing a tag like v0.1.0. Builds native release binaries
+# for macOS (arm64 + x86_64), Linux (x86_64, statically linked via musl)
+# and Windows (x86_64), then publishes them all on a GitHub Release.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+env:
+  CRATE_DIR: mcp-archer-router
+  BIN_NAME: mcp-archer-router
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+            archive: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-14
+            archive: tar.gz
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        working-directory: ${{ env.CRATE_DIR }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        working-directory: ${{ env.CRATE_DIR }}
+        run: |
+          set -euo pipefail
+          out="${BIN_NAME}-${{ github.ref_name }}-${{ matrix.target }}"
+          mkdir -p "dist/${out}"
+          cp "target/${{ matrix.target }}/release/${BIN_NAME}" "dist/${out}/"
+          cp README.md "dist/${out}/"
+          cp ../PROTOCOL.md "dist/${out}/"
+          tar -C dist -czf "dist/${out}.tar.gz" "${out}"
+          echo "ASSET=${{ env.CRATE_DIR }}/dist/${out}.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
+        working-directory: ${{ env.CRATE_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="${BIN_NAME}-${{ github.ref_name }}-${{ matrix.target }}"
+          mkdir -p "dist/${out}"
+          cp "target/${{ matrix.target }}/release/${BIN_NAME}.exe" "dist/${out}/"
+          cp README.md "dist/${out}/"
+          cp ../PROTOCOL.md "dist/${out}/"
+          (cd dist && 7z a "${out}.zip" "${out}")
+          echo "ASSET=${{ env.CRATE_DIR }}/dist/${out}.zip" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*/*
+          generate_release_notes: true
