@@ -1,54 +1,54 @@
 # archer-nx200-sms-api
 
-Reverse engineering (non documentazione ufficiale) del protocollo usato
-dalla WebUI dei router TP-Link Archer con SIM 4G/5G, firmware "GDPR
-encrypt" (testato su un **Archer NX200**, 5G AX1800), e sua reimplementazione
-in più linguaggi/target per leggere/inviare SMS e leggere info SIM/rete/
-consumo dati senza passare dal browser.
+Reverse-engineered (not official documentation) protocol used by the WebUI
+of TP-Link Archer routers with a 4G/5G SIM, "GDPR encrypt" firmware (tested
+on an **Archer NX200**, 5G AX1800), reimplemented in multiple languages/
+targets to read/send SMS and read SIM/network/data-usage info without going
+through the browser.
 
-Il protocollo (handshake RSA 512 bit + AES-128-CBC, gestione sessione
-JSESSIONID/TokenID, elenco degli OID applicativi verificati, limitazioni
-note) è documentato per intero in **[`PROTOCOL.md`](PROTOCOL.md)**: è il
-riferimento comune a tutte le implementazioni sotto, non ce n'è una
-copia per linguaggio.
+The protocol (RSA 512-bit + AES-128-CBC handshake, JSESSIONID/TokenID
+session handling, list of verified application OIDs, known limitations) is
+documented in full in **[`PROTOCOL.md`](PROTOCOL.md)** (in Italian): it's
+the shared reference for every implementation below, there's no
+per-language copy of it.
 
-## Cosa c'è nel repo
+## What's in the repo
 
-| | Linguaggio | Cosa fa |
+| | Language | What it does |
 |---|---|---|
-| [`archer_sms.py`](archer_sms.py) | Python | Client CLI di riferimento: prima implementazione del protocollo, usata per verificarlo. |
-| [`nifi-archer-router/`](nifi-archer-router/) | Java | Processor Apache NiFi 2.x (`InvokeArcherRouter`) per integrare il pannello in una pipeline NiFi. |
-| [`mcp-archer-router/`](mcp-archer-router/) | Rust | Server [MCP](https://modelcontextprotocol.io) (stdio) e/o API REST, per usare il pannello da un agente/LLM o via HTTP. Binario nativo autocontenuto. |
+| [`archer_sms.py`](archer_sms.py) | Python | Reference CLI client: the first implementation of the protocol, used to verify it. |
+| [`nifi-archer-router/`](nifi-archer-router/) | Java | Apache NiFi 2.x processor (`InvokeArcherRouter`) to integrate the panel into a NiFi pipeline. |
+| [`mcp-archer-router/`](mcp-archer-router/) | Rust | [MCP](https://modelcontextprotocol.io) server (stdio) and/or REST API, to use the panel from an agent/LLM or over HTTP. Self-contained native binary. |
 
-Tutte e tre le implementazioni coprono le stesse operazioni (login, lettura
-posta in arrivo SMS, invio SMS, info SIM/rete/consumo dati) con lo stesso
-comportamento verso il router: username di default `"user"` (non
-`"admin"`), certificato TLS autofirmato da accettare esplicitamente, e la
-stessa regola pratica sulla sessione — **il router accetta una sola
-sessione amministrativa alla volta**: un nuovo login (da script o da un
-altro client, incluso il browser) scavalca silenziosamente quello
-precedente, senza conferma. Tenere aperta la GUI mentre gira un client
-automatizzato causa fallimenti intermittenti (vedi `PROTOCOL.md` §6.1).
-Il processor NiFi e il server Rust gestiscono questo caso con un retry
-automatico su sessione scaduta (tranne per l'invio SMS, per evitare un
-doppio invio se la sessione cade a metà del polling dell'esito); il client
-Python è pensato per un singolo comando una tantum e non lo fa.
+All three implementations cover the same operations (login, reading the SMS
+inbox, sending an SMS, SIM/network/data-usage info) with the same behavior
+towards the router: default username `"user"` (not `"admin"`), a
+self-signed TLS certificate that must be explicitly trusted, and the same
+practical rule about the session — **the router only accepts one
+administrative session at a time**: a new login (from a script or another
+client, including the browser) silently overrides the previous one, with
+no warning. Keeping the GUI open while an automated client is running
+causes intermittent failures (see `PROTOCOL.md` §6.1). The NiFi processor
+and the Rust server both handle this with an automatic retry on expired
+session (except for sending an SMS, to avoid a duplicate send if the
+session drops mid-poll while waiting for the result); the Python client is
+meant for a single one-off command and doesn't do this.
 
-Ognuna delle tre directory ha il proprio README con istruzioni di build e
-uso specifiche del linguaggio/target.
+Each of the three directories has its own README with build/usage
+instructions specific to that language/target.
 
-## Stato
+## Status
 
-Verificato end-to-end contro un Archer NX200 reale, con credenziali
-corrette: login, `sim_info`, `sms_inbox` e `sms_send` funzionano su tutte
-le implementazioni. Non ancora esplorato: il firmware del router (per
-capire come sono gestiti utenti/permessi oltre a `user`/`admin`) — vedi
-`PROTOCOL.md` §8 per le lacune note.
+Verified end-to-end against a real Archer NX200, with valid credentials:
+login, `sim_info`, `sms_inbox` and `sms_send` all work across every
+implementation. Not yet explored: the router's firmware (to understand how
+users/permissions are handled beyond `user`/`admin`) — see `PROTOCOL.md`
+§8 for the known gaps.
 
-## Uso responsabile
+## Responsible use
 
-Questo repository è il risultato di reverse engineering della WebUI del
-proprio router, a scopo di interoperabilità e automazione personale (es.
-integrare gli SMS di una SIM 4G/5G in una pipeline domestica). Non è
-software ufficiale TP-Link e non implica alcuna garanzia: usalo solo contro
-router di cui hai la proprietà/autorizzazione e le credenziali legittime.
+This repository is the result of reverse-engineering the WebUI of one's
+own router, for interoperability and personal automation purposes (e.g.
+feeding a 4G/5G SIM's SMS into a home pipeline). It is not official TP-Link
+software and comes with no warranty: only use it against routers you own
+or are authorized to access, with legitimate credentials.
