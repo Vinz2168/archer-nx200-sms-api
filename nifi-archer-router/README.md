@@ -7,8 +7,7 @@ Archer NX200): login, reading the SMS inbox, sending an SMS, reading
 SIM/network/data-usage info.
 
 For the full, verified protocol description (RSA+AES handshake,
-session cookie/token, OIDs, known limitations) see **`../PROTOCOL.md`**
-(in Italian).
+session cookie/token, OIDs, known limitations) see **`../PROTOCOL.md`**.
 
 ## Build
 

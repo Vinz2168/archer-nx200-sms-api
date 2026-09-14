@@ -8,7 +8,7 @@ through the browser.
 
 The protocol (RSA 512-bit + AES-128-CBC handshake, JSESSIONID/TokenID
 session handling, list of verified application OIDs, known limitations) is
-documented in full in **[`PROTOCOL.md`](PROTOCOL.md)** (in Italian): it's
+documented in full in **[`PROTOCOL.md`](PROTOCOL.md)**: it's
 the shared reference for every implementation below, there's no
 per-language copy of it.
 
