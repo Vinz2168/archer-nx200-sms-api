@@ -271,6 +271,106 @@ hostname verification (disabling trust errors alone is not enough:
 hostname verification must be disabled too, or the TLS handshake still
 fails on a name mismatch).
 
+### 6.4 OS-level SSH access, and the real (lack of) privilege model
+
+The router exposes `dropbear` (SSH) on port 22 with the **same credentials
+as the WebUI**. Two things worth knowing before trying it:
+
+- Dropbear here only honors **"shell" channel requests**: both `exec`
+  (`ssh host command`) and the `subsystem` (`sftp host`) request types are
+  rejected outright ("exec/subsystem request failed on channel 0") — no
+  scp/sftp file transfer, no one-shot remote commands, only a full
+  interactive session.
+- A plain interactive shell request (`ssh host`, which allocates a pty)
+  authenticates fine but the connection dies right after, with BusyBox
+  `login` logging things like `lastlog_perform_login: Couldn't stat
+  /var/log/lastlog` and `wtmp_write: problem writing /dev/null/wtmp: Not a
+  directory`, then dropbear reports `Exit (dropbear): Child failed`. This
+  firmware simply doesn't have a `/var/log` and its `/dev/null` handling
+  is broken for whatever `login` uses to record the session — this is
+  fatal only for the **pty-allocating** path.
+- Workaround: request a shell **without a pty** (`ssh -T host`, no
+  command). This skips the utmp/lastlog/pty codepath in `login` entirely
+  and drops you into a working `-sh` (BusyBox `ash`) session, banner
+  ("BBA X.X Platform") included — it's a real shell, not a custom menu
+  CLI, despite first appearances (BusyBox ash prints an unhelpful `-sh:
+  <word>: not found` for anything not a builtin/applet, including `?` and
+  `help`, which looks CLI-menu-like at a glance but isn't).
+
+Once in: `cat /proc/self/status` shows `Uid: 0 0 0 0`, `Gid: 0 0 0 0`,
+`CapEff: 0000003fffffffff` (essentially every Linux capability) — logged
+in as the WebUI's **non-admin `"user"` account**. `ps` confirms it's not
+just this shell: **every single process on the device, including `httpd`
+(the CGI server behind `/cgi_gdpr`), `dropbear` itself, `cwmp` (TR-069),
+the cloud daemons (`cloud-brd`/`cloud_client`/`cloud_https`), and the
+whole modem/baseband stack (`ccci_*`, `ql_ril_service`, `atcid`,
+`mtk_netagent`), runs as the same uid-0 account.** There is no process
+isolation and no OS-level privilege separation whatsoever on this device.
+
+`/etc/passwd` (readable by anyone with a shell, hashes inline — there is
+no separate `/etc/shadow`) has exactly 4 entries: `admin` (uid/gid `0/0`,
+i.e. **root**, password hash present), `dropbear` (uid/gid `500/500`, the
+SSH daemon's own unprivileged account — the only non-root entry),
+`guest` and `nobody` (both **also** uid/gid `0/0`, despite the names).
+Notably **`"user"` — the account the WebUI actually uses by default (see
+§2.2) — has no entry at all**: dropbear must authenticate it against a
+different backend (almost certainly the same GDPR-login credential store
+used by the WebUI, i.e. the same `MD5(username+password)` scheme from
+§2.2, not a standard PAM/`/etc/passwd` lookup), and then simply hands out
+a root shell regardless.
+
+**Conclusion**: the `"user"`/`"admin"` distinction described throughout
+this document (§2.2 `adminType`, the OID-level checks) is a **WebUI/CGI
+application-layer convention only**. It is not backed by any real Unix
+privilege separation: whoever obtains a shell on this device — through
+any of the accounts above, with any of the credentials — already has full
+root access to everything, including the CGI process that enforces that
+same distinction for HTTP clients. This resolves the open question in §8
+about how users/permissions are handled beyond the WebUI's `user`/`admin`
+split: at the OS level, they aren't — it's `admin` everywhere.
+
+Filesystem layout, for context: `/` is `squashfs`, mounted **read-only**
+(this is the same image TP-Link ships, encrypted, in the "firmware
+upgrade" `.bin` — see the note below); the writable state (settings,
+`nvram`-style key/value stores) lives on separate `yaffs2`/`ubifs`/`jffs2`
+partitions (`/data`, `/mnt/vendor/nvram`, `/mnt/vendor/nvcfg`, etc.). An
+Android `adbd_usb` process also runs (consistent with the MediaTek
+SoC/modem stack visible in `ps`: `ccci_*`, `mtk_netagent`, `mali`,
+`sspm`/`scp` worker threads) — a USB-only, not remotely reachable, but
+worth knowing about if you ever have physical access to the board.
+
+**Related, responsibly disclosed vulnerabilities** (TP-Link security
+advisory, [FAQ #5027](https://www.tp-link.com/us/support/faq/5027/), for
+exactly this device family — NX200/NX210/NX500/NX600): **CVE-2025-15517**
+(missing auth check on some CGI endpoints — unauthenticated firmware
+upload/config operations), **CVE-2025-15518**/**-15519** (command
+injection in the administrative CLI, requires the admin role — consistent
+with §6.4's finding that "admin role" is enforced only above the OS
+layer), and **CVE-2025-15605** (hardcoded key in the config-file
+encryption mechanism). All four are fixed in firmware builds
+`260311`/later depending on model; the build analyzed for this document
+(`1.3.0_3.0.0 Build 260506`) is already patched. No public write-up with
+the actual key/PoC was found for any of them as of September 2026.
+
+**On the encrypted firmware `.bin` itself** (the "upgrade" image
+downloadable from TP-Link, distinct from the live filesystem accessed via
+SSH above): it is encrypted end-to-end — `binwalk` finds zero signatures
+in it and Shannon entropy is ~7.95/8 bits across virtually the whole
+93MB, from byte 0 onward (only a small structured-looking header, with
+`55AA`-style sync markers and what looks like an offset/length table, sits
+before the high-entropy payload). The well-known AES-128-CBC key/IV
+(`0123456789abcdef`/`1234567890abcdef`) publicly documented for TP-Link's
+**config.bin** backup format does *not* decrypt it — that's a different
+mechanism from the one protecting the actual firmware upgrade image. No
+public break of this specific firmware-image encryption was found either.
+Getting the unencrypted rootfs is no longer needed for the user/admin
+question (§6.4 answers it directly from the live device), but would still
+matter for anything that requires static analysis of a binary (e.g.
+locating exactly where `httpd` enforces `adminType`/OID whitelisting) —
+that instead just needs reading the live binary through the SSH shell
+(e.g. `grep -a` against `/proc/<pid>/exe`, no `strings` binary available
+in this BusyBox build), not decrypting the `.bin`.
+
 ## 7. Verified OIDs
 
 All confirmed against real traffic (decrypted with the observed session
@@ -317,6 +417,11 @@ instead of blind attempts.
 - Whether/how a SIM `PIN` is handled by `DEV2_CELL_INTF_USIM` (the field
   exists, `PINCheck` was `"Off"` on the test device — not tested with an
   active PIN).
+- ~~How `user`/`admin` permissions are handled at the OS level~~ —
+  answered by §6.4: they aren't, everything runs as root. What's still
+  open is the exact **CGI-layer** enforcement (where in `httpd` the
+  `adminType`/OID checks actually live) and the encryption scheme
+  protecting the firmware upgrade `.bin` (see §6.4 for what was tried).
 
 ## 9. References in the repository
 
