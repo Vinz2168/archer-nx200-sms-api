@@ -433,36 +433,53 @@ the same 406 path regardless of the request path string:
 
 1. `fcn.0x40e8bc()` (a getter for a global byte at `0x4688a0`) must
    return `0`. Nonzero skips the `/superadmin` branch entirely.
-2. A byte in what looks like a per-feature capability table, at
-   `0x46a3b19`, must be nonzero.
+2. A byte at `0x46af01` (base `0x46aee8` + `0x19` — a per-feature state
+   struct shared with a sibling gate at `0x46aee8+0x29` for the `/` /
+   `"user"` branch) must be nonzero.
 
 Neither held on the test device at request time — hence the 406.
 
-**The gate in (1) is a genuine runtime switch, not a build-time
-constant**: it's written by a real setter, `fcn.0x40e884(id, bool)`
-(`id=1` corresponds to this specific flag), which is called from
-`fcn.0x00405cbc` — the generic per-connection **request handler**
-invoked by the `select()`-based accept loop in `http_inetd_main` for
-every ready socket (i.e. it runs for every incoming HTTP request, not
-just OID calls). Inside it, a byte at **offset `0x182`** of the parsed
-incoming-request struct is read and forwarded as the boolean into
-`fcn.0x40e884(1, ...)` — meaning **some not-yet-identified field of the
-request protocol controls this flag at runtime**, over the normal
-network protocol, not via physical/manufacturing access. (A neighboring
-offset, `0x186`, gates two more bytes written into the same
-`0x46a000`-based state region when nonzero — likely a related flag pair,
-not investigated further.)
+**Both gates trace back to an internal IPC message, not the HTTP request
+being served.** `fcn.0x00405cbc` is *not* an HTTP request parser — it's
+`http_init_configByMsg`, `httpd`'s handler for a SysV-style message queue
+(`msg_recv`, queue key at `0x46a000+0xe08`; called once per ready fd from
+the `select()` loop in `http_inetd_main`, but dispatches on the received
+message's **type** field, not on anything from the socket). The message
+type compared against the first word of the message (`0x7ef`, one of
+several `cmp`+`b.eq` cases) is a bulk "apply full config" message: its
+payload directly sets ~10 fields of live state, including:
 
-**Not determined (stopped here — this is a separate, larger RE effort
-from what preceded it)**: the layout of that parsed-request struct, i.e.
-which actual OID/field/header the byte at offset `0x182` (and `0x186`)
-corresponds to. Finding that would require reversing `httpd`'s request
-parser generally (this function is a large multi-case dispatcher over
-many struct offsets, evidently handling far more than just this flag),
-not just tracing one more call — a good starting point for a dedicated
-future session would be `fcn.0x00405cbc` (disassembly saved during this
-session, see below) and correlating its offset list against known
-request fields captured from real GDPR-decrypted traffic (§2, §3).
+- byte at message offset `4` → gate `0x46af01` (enables the
+  `/superadmin` branch).
+- byte at message offset `5` → gate `0x46af11` (enables the `/` /
+  `"user"` branch).
+- byte at message offset `0x182` → forwarded into `fcn.0x40e884(1, ...)`,
+  which writes the global switch at `0x4688a0` (gate 1 above).
+
+**Correction to an earlier version of this section**: it previously
+claimed this was reachable "over the normal network protocol" — that was
+premature. Checked all 9 call sites of `msg_connCliAndSend` (the
+client-side send API) inside `httpd` itself, across 7 functions; none of
+them send message type `0x7ef` or touch this queue — they're all for
+firmware-upgrade progress reporting (`http_rpm_softup.c`:
+`sendFirmInfoToController`, `http_agentDownloadHandler`,
+`http_agentUpgradeHandler`, ...) and a logout-all-users notification
+(`http_rpm_login.c`: `notifyTmpdToLogoutAllUsers`) — unrelated features,
+different message types. **The sender of the `0x7ef` config-apply message
+was not found inside `httpd`** — it's almost certainly a separate,
+not-yet-pulled process/binary on the device (most likely something run at
+boot or on config-reload, given the message shape — a bulk "apply this
+whole config snapshot" rather than a single field update), not something
+demonstrated to be triggerable per-HTTP-request.
+
+**Not determined (stopped here)**: which process sends the `0x7ef`
+message and what decides its field values (offsets `4`, `5`, `0x182`,
+plus several more in the same case handled by helper calls to
+`fcn.0x0040df6c` and `fcn.0x004193f8`, not traced). Finding that needs
+pulling and analyzing a *different* binary than `httpd` — a separate,
+open-ended task, not a follow-up hop from this one. `fcn.0x00405cbc`'s
+full case at message type `0x7ef` (disassembly saved during this session,
+see below) is the concrete starting point if resumed.
 
 The extracted binary (`httpd_extracted`, byte-identical to
 `/bin/httpd` on the device, ELF64 aarch64) and full disassembly/`radare2`
@@ -522,11 +539,15 @@ instead of blind attempts.
   answered by §6.5: `adminType` isn't a permission check at all, it's a
   UI hint picked by request path (`/superadmin` vs `/`) behind two
   runtime flags. Found a genuine undocumented endpoint (`/superadmin`)
-  and that one of its gating flags is settable via the normal request
-  protocol — but **not** which field/OID sets it (would need reversing
-  `httpd`'s request-parser struct layout, see §6.5's last paragraph).
-  Also still open: whether a *generic* per-OID user/admin whitelist check
-  exists anywhere in `httpd` at all — §6.5 only traced the `adminType`
+  and that both its gating flags are set in bulk by an internal IPC
+  message `httpd` receives (`http_init_configByMsg`, message type
+  `0x7ef`) — but **not which process sends that message** or what decides
+  its field values; not shown to be reachable from the normal
+  request/OID protocol (see §6.5's correction paragraph — a different
+  binary than `httpd` would need to be pulled and analyzed to go
+  further). Also still open: whether a *generic* per-OID user/admin
+  whitelist check exists anywhere in `httpd` at all — §6.5 only traced
+  the `adminType`
   string specifically, didn't search for one exhaustively.
 - The encryption scheme protecting the firmware upgrade `.bin` (see
   §6.4 for what was tried).
