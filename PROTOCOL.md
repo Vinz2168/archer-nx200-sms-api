@@ -371,6 +371,105 @@ that instead just needs reading the live binary through the SSH shell
 (e.g. `grep -a` against `/proc/<pid>/exe`, no `strings` binary available
 in this BusyBox build), not decrypting the `.bin`.
 
+### 6.5 Static analysis of `httpd`: what `adminType` actually is, and `/superadmin`
+
+Follow-up to §6.4/§8: located exactly where and how `adminType` is used
+inside `httpd` itself, by pulling the live binary off the device and
+disassembling it (14-15/09/2026).
+
+**Extraction method** (works around both the SSH restrictions in §6.4 and
+a managed-Mac firewall that blocks inbound connections, so a TFTP
+push/pull wasn't an option): the SSH "shell" channel (`ssh -T host`,
+no pty) is a plain, binary-safe duplex byte stream — no NVT/CRLF
+translation happens without a pty. So a `cat /bin/httpd` inside that
+shell, with the *entire local SSH client's stdout* redirected to a file
+(`ssh -T user@host > dump.raw <<'EOF' ... EOF`), transfers the binary
+byte-for-byte over the connection that's already open outbound from the
+client — no inbound port, no scp/sftp, no TFTP needed. Two `echo` sentinel
+lines around the `cat` mark where the real binary starts/ends inside the
+captured file (the login banner and shell prompt are also captured, mixed
+in); slicing between the sentinels in Python and checking for the `\x7fELF`
+magic confirms an exact, uncorrupted copy. This BusyBox also lacks a
+working `tr` (silently produces no output, even given straightforward
+printable-range input) — use `grep -a -oE` with a surrounding
+`[A-Za-z0-9_.]*` character class instead of a `strings`-equivalent
+pipeline.
+
+`httpd` is ELF64 aarch64/musl, statically-ish linked against
+`libssl`/`libcrypto`/`libgdpr.so`/`libcJSON`/`libxml`/`libcmm.so`/
+`libos.so` etc. (all dynamic imports, so the interesting logic mostly
+isn't in `httpd` itself — see the open question below). Analysis used
+`radare2`'s `aaa` auto-analysis plus `axt` (cross-references); the plain
+`objdump`+`grep` approach used for a first pass at string discovery
+under-reports references (BusyBox `tr` breaking the naive "extract
+strings" pipeline, described above, is the same class of trap — always
+sanity-check a string-extraction pipeline against a string you *know*
+exists, like a symbol name).
+
+**Finding**: `adminType` is **not a permission check** — it's a value
+`snprintf`'d into a `<script>` block of the login page, purely a UI hint
+for the frontend JS. There is no whitelist/OID-permission logic anywhere
+near the three literal `adminType="%s"`/`"admin"`/`"user"` strings in
+`.rodata`. The function that renders it (`fcn.0x40bd88`, called from the
+main HTTP request dispatcher) picks between the `"admin"` and `"user"`
+JS templates by `strcmp`-ing the **request path** (not any session/role
+state) against two literals:
+
+- request path `/superadmin` → `adminType="admin"` template.
+- request path `/` (root) → `adminType="user"` template.
+
+**`/superadmin` is a real, undocumented endpoint**, found only because
+its path string is referenced in the binary — not linked from the normal
+WebUI, not mentioned anywhere previously in this document. Verified live:
+`curl -k https://<host>/superadmin` returns **`406 Not Acceptable`**
+(with `Set-Cookie: JSESSIONID=deleted`) regardless of headers sent
+(`Accept`, `User-Agent`, etc. all tried — irrelevant, per the next
+paragraph, so don't bother varying them further).
+
+The 406 is explained precisely by the disassembly, **not** a
+content-negotiation issue: reaching the `/superadmin` render requires
+*two* runtime gates to both pass, otherwise execution falls through to
+the same 406 path regardless of the request path string:
+
+1. `fcn.0x40e8bc()` (a getter for a global byte at `0x4688a0`) must
+   return `0`. Nonzero skips the `/superadmin` branch entirely.
+2. A byte in what looks like a per-feature capability table, at
+   `0x46a3b19`, must be nonzero.
+
+Neither held on the test device at request time — hence the 406.
+
+**The gate in (1) is a genuine runtime switch, not a build-time
+constant**: it's written by a real setter, `fcn.0x40e884(id, bool)`
+(`id=1` corresponds to this specific flag), which is called from
+`fcn.0x00405cbc` — the generic per-connection **request handler**
+invoked by the `select()`-based accept loop in `http_inetd_main` for
+every ready socket (i.e. it runs for every incoming HTTP request, not
+just OID calls). Inside it, a byte at **offset `0x182`** of the parsed
+incoming-request struct is read and forwarded as the boolean into
+`fcn.0x40e884(1, ...)` — meaning **some not-yet-identified field of the
+request protocol controls this flag at runtime**, over the normal
+network protocol, not via physical/manufacturing access. (A neighboring
+offset, `0x186`, gates two more bytes written into the same
+`0x46a000`-based state region when nonzero — likely a related flag pair,
+not investigated further.)
+
+**Not determined (stopped here — this is a separate, larger RE effort
+from what preceded it)**: the layout of that parsed-request struct, i.e.
+which actual OID/field/header the byte at offset `0x182` (and `0x186`)
+corresponds to. Finding that would require reversing `httpd`'s request
+parser generally (this function is a large multi-case dispatcher over
+many struct offsets, evidently handling far more than just this flag),
+not just tracing one more call — a good starting point for a dedicated
+future session would be `fcn.0x00405cbc` (disassembly saved during this
+session, see below) and correlating its offset list against known
+request fields captured from real GDPR-decrypted traffic (§2, §3).
+
+The extracted binary (`httpd_extracted`, byte-identical to
+`/bin/httpd` on the device, ELF64 aarch64) and full disassembly/`radare2`
+notes from this session were kept only in a scratch/tmp location, not
+committed to the repo — re-extract with the method above if resuming
+this thread.
+
 ## 7. Verified OIDs
 
 All confirmed against real traffic (decrypted with the observed session
@@ -418,10 +517,19 @@ instead of blind attempts.
   exists, `PINCheck` was `"Off"` on the test device — not tested with an
   active PIN).
 - ~~How `user`/`admin` permissions are handled at the OS level~~ —
-  answered by §6.4: they aren't, everything runs as root. What's still
-  open is the exact **CGI-layer** enforcement (where in `httpd` the
-  `adminType`/OID checks actually live) and the encryption scheme
-  protecting the firmware upgrade `.bin` (see §6.4 for what was tried).
+  answered by §6.4: they aren't, everything runs as root.
+- ~~Where in `httpd` the `adminType`/OID checks actually live~~ —
+  answered by §6.5: `adminType` isn't a permission check at all, it's a
+  UI hint picked by request path (`/superadmin` vs `/`) behind two
+  runtime flags. Found a genuine undocumented endpoint (`/superadmin`)
+  and that one of its gating flags is settable via the normal request
+  protocol — but **not** which field/OID sets it (would need reversing
+  `httpd`'s request-parser struct layout, see §6.5's last paragraph).
+  Also still open: whether a *generic* per-OID user/admin whitelist check
+  exists anywhere in `httpd` at all — §6.5 only traced the `adminType`
+  string specifically, didn't search for one exhaustively.
+- The encryption scheme protecting the firmware upgrade `.bin` (see
+  §6.4 for what was tried).
 
 ## 9. References in the repository
 
