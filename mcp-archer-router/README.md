@@ -1,91 +1,93 @@
 # mcp-archer-router
 
-Server [MCP](https://modelcontextprotocol.io) (stdio) **e/o** API REST (JSON
-su HTTP) per il pannello di gestione dei router TP-Link Archer con SIM 4G/5G
-(firmware "GDPR encrypt", testato su **Archer NX200**). Stesse funzionalità
-di `archer_sms.py` e del processor NiFi in `nifi-archer-router/`: lettura
-della posta in arrivo SMS, invio SMS, info SIM/rete/consumo dati —
-riprodotte in Rust senza dipendenze esterne oltre alle librerie di sistema.
+[MCP](https://modelcontextprotocol.io) server (stdio) **and/or** REST API
+(JSON over HTTP) for the management panel of TP-Link Archer routers with a
+4G/5G SIM (firmware "GDPR encrypt", tested on the **Archer NX200**). Same
+functionality as `archer_sms.py` and the NiFi processor in
+`nifi-archer-router/`: reading the SMS inbox, sending SMS, SIM/network/data-
+usage info — reproduced in Rust with no external dependencies beyond
+system libraries.
 
-Vedi `PROTOCOL.md` nella root del repository per la descrizione completa del
-protocollo.
+See `PROTOCOL.md` in the repository root for the full protocol
+description.
 
-## Transport: MCP, REST, o entrambi
+## Transport: MCP, REST, or both
 
-I due transport si accendono/spengono indipendentemente (`ARCHER_MCP_ENABLED`
-/ `ARCHER_REST_ENABLED`, vedi Configurazione) e, quando sono attivi insieme,
-condividono **la stessa sessione** verso il router (stesso login in cache):
-il router ne accetta una sola alla volta, quindi non avrebbe senso farne
-autenticare due indipendenti l'uno dall'altro. Ogni errore verso il router,
-su entrambi i transport, viene loggato (livello ERROR) su stderr prima di
-essere tradotto nella risposta all'MCP client o nel body JSON REST.
+The two transports are turned on/off independently (`ARCHER_MCP_ENABLED` /
+`ARCHER_REST_ENABLED`, see Configuration) and, when both are active, they
+share **the same session** towards the router (same cached login): the
+router only accepts one at a time, so it wouldn't make sense to have two
+independent logins. Every error talking to the router, on either
+transport, is logged (ERROR level) to stderr before being translated into
+the MCP client response or the REST JSON body.
 
-### Tool / endpoint esposti
+### Exposed tools / endpoints
 
-| Tool MCP | Endpoint REST | Descrizione |
+| MCP tool | REST endpoint | Description |
 |---|---|---|
-| `sms_inbox` | `GET /sms/inbox?page=0` | Elenca gli SMS in posta in arrivo. `page` opzionale, 0-based, default 0. |
-| `sms_send` | `POST /sms/send` (body `{"to","text","wait_result"?}`) | Invia un SMS. `wait_result` default `true`: attende fino a 20s l'esito. |
-| `sim_info` | `GET /sim/info` | ICCID/IMSI, segnale, IP assegnato, consumo dati totale/odierno. |
-| — | `GET /health` | Health check statico (non tocca il router), per readiness probe. |
+| `sms_inbox` | `GET /sms/inbox?page=0` | Lists received SMS. `page` optional, 0-based, default 0. |
+| `sms_send` | `POST /sms/send` (body `{"to","text","wait_result"?}`) | Sends an SMS. `wait_result` default `true`: waits up to 20s for the outcome. |
+| `sim_info` | `GET /sim/info` | ICCID/IMSI, signal, assigned IP, total/today data usage. |
+| — | `GET /health` | Static health check (doesn't touch the router), for readiness probes. |
 
-Il REST non ha **nessuna autenticazione**: pensato per essere esposto solo su
-`localhost` o su una rete già fidata (default `ARCHER_REST_BIND=127.0.0.1:...`
-— cambialo solo se sai cosa comporta esporlo altrove). Un errore verso il
-router diventa sempre `502 Bad Gateway` con body `{"error": "..."}`; una
-richiesta malformata (JSON invalido, campo mancante) è già intercettata da
-`axum` prima di arrivare al router, con `400`/`422`.
+The REST API has **no authentication**: it's meant to be exposed only on
+`localhost` or on an already-trusted network (default
+`ARCHER_REST_BIND=127.0.0.1:...` — only change it if you know what exposing
+it elsewhere implies). Any error towards the router always becomes
+`502 Bad Gateway` with body `{"error": "..."}`; a malformed request
+(invalid JSON, missing field) is already intercepted by `axum` before
+reaching the router, with `400`/`422`.
 
-## Sessione
+## Session
 
-Login **lazy**: la prima chiamata a un tool autentica e mette in cache
-cookie di sessione + token CSRF; le chiamate successive riusano la sessione.
-Se il router segnala che la sessione non è più valida (tipicamente perché
-qualcun altro si è loggato nel frattempo, es. dalla GUI del browser — il
-router accetta una sola sessione amministrativa alla volta, vedi
-PROTOCOL.md §6.1), il server si ri-autentica e ritenta automaticamente
-l'operazione **una volta**, tranne per `sms_send`: se la sessione scade
-*durante* l'attesa dell'esito (cioè dopo che l'SMS è già stato accodato con
-successo), l'operazione non viene ripetuta per evitare un invio duplicato —
-il tool ritorna comunque `success: true` con una nota che l'esito finale non
-è stato confermato.
+**Lazy** login: the first call to a tool authenticates and caches the
+session cookie + CSRF token; subsequent calls reuse the session. If the
+router reports that the session is no longer valid (typically because
+someone else logged in meanwhile, e.g. from the browser GUI — the router
+accepts only one administrative session at a time, see PROTOCOL.md §6.1),
+the server re-authenticates and automatically retries the operation
+**once**, except for `sms_send`: if the session expires *while* waiting for
+the outcome (i.e. after the SMS has already been queued successfully), the
+operation is not repeated to avoid a duplicate send — the tool still
+returns `success: true` with a note that the final outcome wasn't
+confirmed.
 
-Tutte le chiamate condividono un'unica sessione dietro un lock: non c'è
-concorrenza reale verso il router, che comunque non la supporterebbe (una
-sola sessione alla volta).
+All calls share a single session behind a lock: there's no real
+concurrency towards the router, which wouldn't support it anyway (only one
+session at a time).
 
-## Configurazione
+## Configuration
 
-Variabili d'ambiente:
+Environment variables:
 
-| Variabile | Default | Note |
+| Variable | Default | Notes |
 |---|---|---|
-| `ARCHER_ROUTER_URL` | `https://192.168.10.1` | URL base del pannello. |
-| `ARCHER_USERNAME` | `user` | Su modelli come l'NX200, senza campo username in GUI, è `"user"` e non `"admin"`. |
-| `ARCHER_PASSWORD` | *(obbligatoria)* | Password del pannello. |
-| `ARCHER_TRUST_ALL_CERTS` | `true` | Il pannello usa un certificato TLS autofirmato senza subject/SAN (vedi PROTOCOL.md §6.3): lasciare `true` a meno di aver installato un certificato valido. |
-| `ARCHER_MCP_ENABLED` | `true` | Server MCP su stdio. |
-| `ARCHER_REST_ENABLED` | `false` | API REST JSON su HTTP (vedi sopra). |
-| `ARCHER_REST_BIND` | `127.0.0.1:8787` | Indirizzo:porta di ascolto REST, solo se `ARCHER_REST_ENABLED=true`. |
+| `ARCHER_ROUTER_URL` | `https://192.168.10.1` | Base URL of the panel. |
+| `ARCHER_USERNAME` | `user` | On models like the NX200, with no username field in the GUI, it's `"user"`, not `"admin"`. |
+| `ARCHER_PASSWORD` | *(required)* | Password of the panel. |
+| `ARCHER_TRUST_ALL_CERTS` | `true` | The panel uses a self-signed TLS certificate with no subject/SAN (see PROTOCOL.md §6.3): leave `true` unless you've installed a valid certificate. |
+| `ARCHER_MCP_ENABLED` | `true` | MCP server over stdio. |
+| `ARCHER_REST_ENABLED` | `false` | REST JSON API over HTTP (see above). |
+| `ARCHER_REST_BIND` | `127.0.0.1:8787` | REST listen address:port, only used if `ARCHER_REST_ENABLED=true`. |
 
-Almeno uno tra `ARCHER_MCP_ENABLED` e `ARCHER_REST_ENABLED` deve restare
-`true`, altrimenti il processo si rifiuta di partire (log d'errore + exit
-non-zero).
+At least one of `ARCHER_MCP_ENABLED` and `ARCHER_REST_ENABLED` must stay
+`true`, otherwise the process refuses to start (error log + non-zero
+exit).
 
-## Binari precompilati
+## Precompiled binaries
 
-Ogni tag `vX.Y.Z` (vedi [Release](https://github.com/Vinz2168/archer-nx200-sms-api/releases))
-attiva una GitHub Action (`.github/workflows/release.yml`, alla root del
-repo) che compila nativamente e pubblica i binari per:
+Every `vX.Y.Z` tag (see [Releases](https://github.com/Vinz2168/archer-nx200-sms-api/releases))
+triggers a GitHub Action (`.github/workflows/release.yml`, at the repo
+root) that natively compiles and publishes binaries for:
 
 - macOS Apple Silicon (`aarch64-apple-darwin`)
 - macOS Intel (`x86_64-apple-darwin`)
-- Linux x86_64, staticamente linkato (`x86_64-unknown-linux-musl`)
+- Linux x86_64, statically linked (`x86_64-unknown-linux-musl`)
 - Windows x86_64 (`x86_64-pc-windows-msvc`)
 
-Ogni archivio (`.tar.gz` per macOS/Linux, `.zip` per Windows) contiene il
-binario, questo README e `PROTOCOL.md`. Per compilare da sorgente invece,
-vedi sotto.
+Each archive (`.tar.gz` for macOS/Linux, `.zip` for Windows) contains the
+binary, this README and `PROTOCOL.md`. To build from source instead, see
+below.
 
 ## Build
 
@@ -93,40 +95,41 @@ vedi sotto.
 cargo build --release
 ```
 
-Produce un binario nativo autocontenuto in `target/release/mcp-archer-router`
-(TLS via `rustls`, non OpenSSL/native-tls: su macOS le uniche dipendenze
-dinamiche sono le librerie di sistema — verificabile con `otool -L`, su
-Linux con `ldd`).
+Produces a self-contained native binary at
+`target/release/mcp-archer-router` (TLS via `rustls`, not
+OpenSSL/native-tls: on macOS the only dynamic dependencies are system
+libraries — verifiable with `otool -L`, on Linux with `ldd`).
 
-### Cross-compilare per Linux x86_64 (es. per un homeserver)
+### Cross-compiling for Linux x86_64 (e.g. for a homeserver)
 
-Da macOS, con [`cross`](https://github.com/cross-rs/cross) (richiede Docker):
+From macOS, with [`cross`](https://github.com/cross-rs/cross) (requires
+Docker):
 
 ```
 cargo install cross --git https://github.com/cross-rs/cross
 cross build --release --target x86_64-unknown-linux-musl
 ```
 
-Target `musl`, non `gnu`: produce un binario **staticamente linkato**
-(`ldd` mostra solo il proprio loader musl, nessuna libreria esterna) — gira
-su qualunque distro Linux x86_64 senza vincoli di versione glibc. Il
-binario risultante è in
-`target/x86_64-unknown-linux-musl/release/mcp-archer-router`; uno `strip`
-(es. `docker run --rm --platform linux/amd64 -v "$PWD/...:/out" alpine sh -c
-"apk add -q binutils && strip /out/mcp-archer-router"`) lo riduce di
-circa un quarto. Verificato (in questo modo, cross-compilato da macOS
-arm64) sia con `file`/`ldd` sia con un'esecuzione reale in un container
-`--platform linux/amd64`.
+Target `musl`, not `gnu`: produces a **statically linked** binary (`ldd`
+shows only its own musl loader, no external libraries) — runs on any
+Linux x86_64 distro with no glibc version constraints. The resulting
+binary is at `target/x86_64-unknown-linux-musl/release/mcp-archer-router`;
+a `strip` (e.g. `docker run --rm --platform linux/amd64 -v
+"$PWD/...:/out" alpine sh -c "apk add -q binutils && strip
+/out/mcp-archer-router"`) shrinks it by about a quarter. Verified (this
+way, cross-compiled from macOS arm64) both with `file`/`ldd` and with an
+actual run inside a `--platform linux/amd64` container.
 
-## Configurazione in un client MCP
+## Configuration in an MCP client
 
-Esempio per un client che legge un file `mcp.json`/`claude_desktop_config.json`:
+Example for a client that reads an `mcp.json`/`claude_desktop_config.json`
+file:
 
 ```json
 {
   "mcpServers": {
     "archer-router": {
-      "command": "/percorso/a/target/release/mcp-archer-router",
+      "command": "/path/to/target/release/mcp-archer-router",
       "env": {
         "ARCHER_ROUTER_URL": "https://192.168.10.1",
         "ARCHER_USERNAME": "user",
@@ -137,16 +140,16 @@ Esempio per un client che legge un file `mcp.json`/`claude_desktop_config.json`:
 }
 ```
 
-## Stato
+## Status
 
-Compila, esegue i test crittografici (`cargo test`: MD5, AES-128-CBC, firma
-RSA raw verificati contro vettori noti/una chiave di test) ed è **verificato
-end-to-end contro un Archer NX200 reale**, con credenziali corrette:
-handshake RSA/AES-128-CBC, sessione (JSESSIONID + TokenID), login,
-`sim_info` e `sms_inbox` restituiscono dati reali dal router, su entrambi i
-transport (MCP via JSON-RPC su stdio, REST via HTTP), singolarmente e
-insieme, incluso `sms_send` (esempio dedicato `send_test_sms.rs`, separato
-da `live_check.rs` che resta di sola lettura): SMS inviato con successo,
-`sendResult: "1"` confermato dal router. Non ancora esercitato: il retry
-automatico su sessione scaduta/rubata (richiederebbe un secondo login
-concorrente, es. dalla GUI, durante un test).
+Compiles, passes the cryptographic tests (`cargo test`: MD5, AES-128-CBC,
+raw RSA signing verified against known vectors/a test key) and is
+**verified end-to-end against a real Archer NX200**, with correct
+credentials: RSA/AES-128-CBC handshake, session (JSESSIONID + TokenID),
+login, `sim_info` and `sms_inbox` return real data from the router, on
+both transports (MCP via JSON-RPC over stdio, REST over HTTP),
+individually and together, including `sms_send` (dedicated example
+`send_test_sms.rs`, separate from `live_check.rs` which stays read-only):
+SMS sent successfully, `sendResult: "1"` confirmed by the router. Not yet
+exercised: automatic retry on an expired/stolen session (would require a
+second concurrent login, e.g. from the GUI, during a test).
