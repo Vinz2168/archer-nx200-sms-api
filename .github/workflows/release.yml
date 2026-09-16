@@ -1,8 +1,9 @@
-name: Release mcp-archer-router
+name: Release
 
 # Triggered by pushing a tag like v0.1.0. Builds native release binaries
-# for macOS (arm64 + x86_64), Linux (x86_64, statically linked via musl)
-# and Windows (x86_64), then publishes them all on a GitHub Release.
+# for mcp-archer-router (macOS arm64 + x86_64, Linux x86_64 statically
+# linked via musl, Windows x86_64) and the nifi-archer-router NAR, then
+# publishes them all on a GitHub Release.
 on:
   push:
     tags:
@@ -15,6 +16,8 @@ permissions:
 env:
   CRATE_DIR: mcp-archer-router
   BIN_NAME: mcp-archer-router
+  NIFI_DIR: nifi-archer-router
+  NAR_NAME: nifi-archer-router-nar-1.0.0.nar
 
 jobs:
   build:
@@ -87,8 +90,43 @@ jobs:
           path: ${{ env.ASSET }}
           if-no-files-found: error
 
+  build-nar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Build NAR
+        working-directory: ${{ env.NIFI_DIR }}
+        run: mvn --batch-mode --no-transfer-progress clean package
+
+      - name: Package
+        working-directory: ${{ env.NIFI_DIR }}
+        run: |
+          set -euo pipefail
+          out="nifi-archer-router-${{ github.ref_name }}"
+          mkdir -p "dist/${out}"
+          cp "nifi-archer-router-nar/target/${NAR_NAME}" "dist/${out}/"
+          cp README.md "dist/${out}/"
+          cp ../PROTOCOL.md "dist/${out}/"
+          tar -C dist -czf "dist/${out}.tar.gz" "${out}"
+          echo "ASSET=${{ env.NIFI_DIR }}/dist/${out}.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nifi-archer-router-nar
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+
   release:
-    needs: build
+    needs: [build, build-nar]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts

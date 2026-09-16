@@ -35,7 +35,10 @@ session drops mid-poll while waiting for the result); the Python client is
 meant for a single one-off command and doesn't do this.
 
 Each of the three directories has its own README with build/usage
-instructions specific to that language/target.
+instructions specific to that language/target. Every tagged release also
+publishes prebuilt downloads for both the `mcp-archer-router` binaries
+(see below) and the `nifi-archer-router` NAR, on the
+[Releases page](https://github.com/Vinz2168/archer-nx200-sms-api/releases).
 
 ## Running the server
 

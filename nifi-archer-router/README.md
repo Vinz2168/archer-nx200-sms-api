@@ -11,9 +11,16 @@ session cookie/token, OIDs, known limitations) see **`../PROTOCOL.md`**.
 
 ## Build
 
-Requires JDK 21+ and Maven. The `nifi-archer-router-processors` module
-includes unit tests that verify the RSA/AES implementation **against a real
-signature captured from the router** (not just generic test vectors).
+A prebuilt `.nar` is published on every tagged release (see
+[Releases](https://github.com/Vinz2168/archer-nx200-sms-api/releases)),
+inside a `nifi-archer-router-vX.Y.Z.tar.gz` archive together with this
+README and `PROTOCOL.md` — skip straight to
+[Installation](#installation) if you just want to use it.
+
+To build from source instead, you need JDK 21+ and Maven. The
+`nifi-archer-router-processors` module includes unit tests that verify the
+RSA/AES implementation **against a real signature captured from the
+router** (not just generic test vectors).
 
 ```bash
 mvn clean package
